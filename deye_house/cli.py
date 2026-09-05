@@ -9,7 +9,7 @@ import time
 from typing import Any
 
 from deye_house.client import DeyeClient, DeyeError, discover_inverter, load_dotenv
-from deye_house.policy import apply_orders, policy_state, verify_config
+from deye_house.policy import active_soc_floor, apply_orders, policy_state, verify_config
 from deye_house.telemetry import parse_latest
 
 
@@ -69,7 +69,7 @@ def _print_status(snap: dict[str, Any]) -> None:
     _print(f"  dailyImport   {t.get('dailyImport')} {t.get('dailyImportUnit') or 'kWh'}")
     _print(f"  policy        {snap['policyState']}")
     _print("")
-    _print("Config vs 60% floor target")
+    _print("Config vs daytime 40% / night 60% target")
     failed = 0
     for check in snap["checks"]:
         mark = "ok" if check.ok else "FAIL"
@@ -80,15 +80,16 @@ def _print_status(snap: dict[str, Any]) -> None:
     if failed:
         _print(f"{failed} check(s) not matching target.")
     else:
-        _print("Config matches the 60% SOC floor policy.")
+        _print("Config matches the daytime 40% / night 60% SOC policy.")
 
     soc = t.get("batterySoc")
     grid = t.get("gridPower") or 0
     batt = t.get("batteryPower") or 0
-    if soc is not None and soc > 60 and grid > 300 and batt <= 50:
+    floor = active_soc_floor()
+    if soc is not None and soc > floor and grid > 300 and batt <= 50:
         _print(
-            "Warning: SOC is above 60% but grid import is large and the battery is not discharging. "
-            "Re-run apply."
+            f"Warning: SOC is above the active {floor}% floor but grid import is large "
+            "and the battery is not discharging. Re-run apply."
         )
 
 
@@ -148,11 +149,11 @@ def cmd_verify(_: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m deye_house",
-        description="Apply a 60%% SOC floor and zero-export policy via DeyeCloud India OpenAPI.",
+        description="Apply a 40%% daytime / 60%% night SOC floor and zero-export policy via DeyeCloud India OpenAPI.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status", help="Print live telemetry and config; no writes")
-    apply_p = sub.add_parser("apply", help="Write the 60%% policy, then verify")
+    apply_p = sub.add_parser("apply", help="Write the SOC policy, then verify")
     apply_p.add_argument("--dry-run", action="store_true", help="Show current state only")
     sub.add_parser("verify", help="Exit non-zero if config != target")
     return parser

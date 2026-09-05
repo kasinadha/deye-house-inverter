@@ -1,13 +1,22 @@
-"""Fixed 60% SOC floor / zero-export policy for the house hybrid inverter."""
+"""SOC floor / zero-export policy for the house hybrid inverter.
+
+Night/evening floor is 60%. From 09:00 to 16:00 (Asia/Kolkata) the floor
+drops to 40% so daytime load can come from the battery before grid import.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, time
 from typing import Any
+from zoneinfo import ZoneInfo
 
-SOC_FLOOR = 60
+SITE_TZ = ZoneInfo("Asia/Kolkata")
+SOC_FLOOR_NIGHT = 60
+SOC_FLOOR_DAY = 40
+DAY_START = time(9, 0)
+DAY_END = time(16, 0)
 TOU_POWER_W = 6000
-TOU_TIMES = ("00:00", "04:00", "08:00", "12:00", "16:00", "20:00")
 TOU_DAYS = (
     "MONDAY",
     "TUESDAY",
@@ -20,6 +29,35 @@ TOU_DAYS = (
 WORK_MODE = "ZERO_EXPORT_TO_LOAD"
 ENERGY_PATTERN = "LOAD_FIRST"
 
+# Each slot lasts until the next. 09:00–16:00 is the daytime 40% window.
+TOU_SLOTS = (
+    {"time": "00:00", "soc": SOC_FLOOR_NIGHT},
+    {"time": "04:00", "soc": SOC_FLOOR_NIGHT},
+    {"time": "09:00", "soc": SOC_FLOOR_DAY},
+    {"time": "12:00", "soc": SOC_FLOOR_DAY},
+    {"time": "16:00", "soc": SOC_FLOOR_NIGHT},
+    {"time": "20:00", "soc": SOC_FLOOR_NIGHT},
+)
+TOU_TIMES = tuple(slot["time"] for slot in TOU_SLOTS)
+
+# Hard low-SOC must be the daytime floor so TOU can discharge to 40%.
+BATT_LOW = SOC_FLOOR_DAY
+
+
+def is_day_window(when: datetime | None = None) -> bool:
+    if when is None:
+        now = datetime.now(SITE_TZ)
+    elif when.tzinfo is None:
+        now = when.replace(tzinfo=SITE_TZ)
+    else:
+        now = when.astimezone(SITE_TZ)
+    clock = now.time().replace(tzinfo=None)
+    return DAY_START <= clock < DAY_END
+
+
+def active_soc_floor(when: datetime | None = None) -> int:
+    return SOC_FLOOR_DAY if is_day_window(when) else SOC_FLOOR_NIGHT
+
 
 def tou_slots(enable_grid_charge: bool = True) -> list[dict[str, Any]]:
     return [
@@ -27,10 +65,10 @@ def tou_slots(enable_grid_charge: bool = True) -> list[dict[str, Any]]:
             "enableGeneration": True,
             "enableGridCharge": enable_grid_charge,
             "power": TOU_POWER_W,
-            "soc": SOC_FLOOR,
-            "time": t,
+            "soc": slot["soc"],
+            "time": slot["time"],
         }
-        for t in TOU_TIMES
+        for slot in TOU_SLOTS
     ]
 
 
@@ -57,12 +95,12 @@ def apply_orders(device_sn: str) -> list[tuple[str, str, dict[str, Any]]]:
             },
         ),
         (
-            "BATT_LOW=60",
+            "BATT_LOW=40",
             "/order/battery/parameter/update",
-            {"deviceSn": device_sn, "paramterType": "BATT_LOW", "value": SOC_FLOOR},
+            {"deviceSn": device_sn, "paramterType": "BATT_LOW", "value": BATT_LOW},
         ),
         (
-            "TOU slots SOC=60",
+            "TOU slots day 40% / night 60%",
             "/order/sys/tou/update",
             {"deviceSn": device_sn, "timeUseSettingItems": tou_slots(True)},
         ),
@@ -162,9 +200,9 @@ def verify_config(
         Check("touSlotCount", 6, len(items), len(items) == 6),
         Check(
             "battLowCapacity",
-            SOC_FLOOR,
+            BATT_LOW,
             _as_int(battery.get("battLowCapacity")),
-            _as_int(battery.get("battLowCapacity")) == SOC_FLOOR,
+            _as_int(battery.get("battLowCapacity")) == BATT_LOW,
         ),
     ]
 
@@ -174,12 +212,13 @@ def verify_config(
 
     for i, slot in enumerate(items):
         prefix = f"slot{i}"
+        expected_soc = TOU_SLOTS[i]["soc"] if i < len(TOU_SLOTS) else None
         checks.append(
             Check(
                 f"{prefix}.soc",
-                SOC_FLOOR,
+                expected_soc,
                 _as_int(slot.get("soc")),
-                _as_int(slot.get("soc")) == SOC_FLOOR,
+                _as_int(slot.get("soc")) == expected_soc,
             )
         )
         checks.append(
@@ -209,11 +248,13 @@ def verify_config(
     return checks
 
 
-def policy_state(soc: float | None) -> str:
+def policy_state(soc: float | None, when: datetime | None = None) -> str:
+    floor = active_soc_floor(when)
+    window = "day" if floor == SOC_FLOOR_DAY else "night"
     if soc is None:
-        return "unknown"
-    if soc > SOC_FLOOR:
-        return "above_floor"
-    if soc < SOC_FLOOR:
-        return "below_floor"
-    return "at_floor"
+        return f"unknown ({window} floor {floor}%)"
+    if soc > floor:
+        return f"above_floor ({window} {floor}%)"
+    if soc < floor:
+        return f"below_floor ({window} {floor}%)"
+    return f"at_floor ({window} {floor}%)"

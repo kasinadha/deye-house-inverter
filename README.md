@@ -1,11 +1,12 @@
 # Deye house inverter CLI
 
-Python CLI for the house hybrid inverter on **DeyeCloud India OpenAPI**. It applies a fixed energy policy:
+Python CLI for the house hybrid inverter on **DeyeCloud India OpenAPI**. It applies a fixed energy policy (times are **Asia/Kolkata**):
 
 - Keep **grid export at 0**
-- Use PV + battery whenever SOC is **above 60%**
-- Import from the grid **only** to restore SOC back to **60%**
-- At 60%, hold the floor; PV may still charge above it
+- **09:00–16:00:** use PV + battery down to **40%** SOC; import only if SOC falls below 40%
+- **16:00–09:00:** use PV + battery down to **60%** SOC; import only if SOC falls below 60%
+- At 16:00, if SOC is under 60%, grid charge restores the night floor
+- At the active floor, hold; PV may still charge above it
 
 This is not the Dendukuri Residences rental app.
 
@@ -36,7 +37,7 @@ India only: `https://india-developer.deyecloud.com/v1.0`. EU/US hosts reject thi
 
 ```bash
 python3 -m deye_house status    # live telemetry + config, no writes
-python3 -m deye_house apply     # write the 60% policy, then verify
+python3 -m deye_house apply     # write the 40%/60% policy, then verify
 python3 -m deye_house verify    # fail if config != target
 python3 -m deye_house apply --dry-run
 python3 -m unittest discover -s tests
@@ -52,9 +53,9 @@ Deye does not take a live “if SOC then …” script. The inverter is programm
 |---|---|
 | Work mode | `ZERO_EXPORT_TO_LOAD` |
 | Energy pattern | `LOAD_FIRST` |
-| Grid charge | ON (needed so SOC &lt; 60% can recover) |
-| Battery low | `60` |
-| TOU | ON every day, 6 slots, SOC target **60%**, grid+PV charge, 6000 W |
+| Grid charge | ON (needed so SOC below the active floor can recover) |
+| Battery low | `40` (hard floor; must be the daytime value so TOU can use 40%) |
+| TOU | ON every day, 6 slots, grid+PV charge, 6000 W: **60%** at 00:00/04:00/16:00/20:00, **40%** at 09:00/12:00 |
 | Max sell / zero-export power | `0` |
 | Solar sell | OFF |
 

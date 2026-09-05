@@ -8,7 +8,7 @@ import sys
 import time
 from typing import Any
 
-from deye_house.client import DeyeClient, DeyeError, discover_inverter, load_dotenv
+from deye_house.client import DeyeClient, DeyeError, discover_inverter, env_file_path
 from deye_house.policy import active_soc_floor, apply_orders, policy_state, verify_config
 from deye_house.telemetry import parse_latest
 
@@ -17,9 +17,10 @@ def _print(msg: str) -> None:
     print(msg, flush=True)
 
 
-def _connect() -> tuple[DeyeClient, dict[str, Any]]:
-    load_dotenv()
-    client = DeyeClient.from_env()
+def _connect(args: argparse.Namespace) -> tuple[DeyeClient, dict[str, Any]]:
+    path = env_file_path(getattr(args, "villa", None), getattr(args, "env", None))
+    _print(f"Credentials file: {path} (not uploaded to git)")
+    client = DeyeClient.from_env(path)
     login = client.login()
     _print(f"Logged in uid={login.get('uid')} (token hidden)")
     preferred = os.environ.get("DEYE_DEVICE_SN", "").strip() or None
@@ -93,8 +94,8 @@ def _print_status(snap: dict[str, Any]) -> None:
         )
 
 
-def cmd_status(_: argparse.Namespace) -> int:
-    client, device = _connect()
+def cmd_status(args: argparse.Namespace) -> int:
+    client, device = _connect(args)
     snap = _snapshot(client, device)
     _print_status(snap)
     return 0 if all(c.ok for c in snap["checks"]) else 1
@@ -112,7 +113,7 @@ def _reread_until_ok(client: DeyeClient, device: dict[str, Any], tries: int = 6)
 
 
 def cmd_apply(args: argparse.Namespace) -> int:
-    client, device = _connect()
+    client, device = _connect(args)
     sn = device["deviceSn"]
     before = _snapshot(client, device)
     _print("Before:")
@@ -135,8 +136,8 @@ def cmd_apply(args: argparse.Namespace) -> int:
     return 0 if all(c.ok for c in snap["checks"]) else 1
 
 
-def cmd_verify(_: argparse.Namespace) -> int:
-    client, device = _connect()
+def cmd_verify(args: argparse.Namespace) -> int:
+    client, device = _connect(args)
     snap = _snapshot(client, device)
     _print_status(snap)
     if not all(c.ok for c in snap["checks"]):
@@ -150,6 +151,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m deye_house",
         description="Apply a 40%% daytime / 60%% night SOC floor and zero-export policy via DeyeCloud India OpenAPI.",
+    )
+    parser.add_argument(
+        "--villa",
+        metavar="NAME",
+        help="Load gitignored .env.NAME (example: --villa villa431). Do not commit this file.",
+    )
+    parser.add_argument(
+        "--env",
+        metavar="PATH",
+        help="Credential file path (default .env). Ignored if --villa is set.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status", help="Print live telemetry and config; no writes")

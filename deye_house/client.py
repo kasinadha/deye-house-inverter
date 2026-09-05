@@ -36,6 +36,15 @@ def load_dotenv(path: str = ".env") -> None:
                 os.environ[key] = value
 
 
+def env_file_path(villa: str | None = None, env: str | None = None) -> str:
+    """Local credential file. Never commit these; gitignore covers .env*."""
+    if villa:
+        return f".env.{villa}"
+    if env:
+        return env
+    return ".env"
+
+
 def sha256_hex(plaintext: str) -> str:
     return hashlib.sha256(plaintext.encode("utf-8")).hexdigest().lower()
 
@@ -76,8 +85,16 @@ class DeyeClient:
         self.token: str | None = None
 
     @classmethod
-    def from_env(cls) -> DeyeClient:
-        load_dotenv()
+    def from_env(cls, env_path: str = ".env") -> DeyeClient:
+        if not os.path.isfile(env_path) and not all(
+            os.environ.get(name)
+            for name in ("DEYE_APP_ID", "DEYE_APP_SECRET", "DEYE_EMAIL", "DEYE_PASSWORD")
+        ):
+            raise DeyeError(
+                f"Missing {env_path}. Copy .env.example to that file "
+                "(keep it local; do not commit or push it)."
+            )
+        load_dotenv(env_path)
         missing = [
             name
             for name in ("DEYE_APP_ID", "DEYE_APP_SECRET", "DEYE_EMAIL", "DEYE_PASSWORD")
@@ -85,7 +102,9 @@ class DeyeClient:
         ]
         if missing:
             raise DeyeError(
-                "Missing env vars: " + ", ".join(missing) + ". Copy .env.example to .env."
+                "Missing env vars: "
+                + ", ".join(missing)
+                + f". Fill {env_path} from .env.example."
             )
         return cls(
             app_id=os.environ["DEYE_APP_ID"].strip(),

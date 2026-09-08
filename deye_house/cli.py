@@ -70,7 +70,7 @@ def _print_status(snap: dict[str, Any]) -> None:
     _print(f"  dailyImport   {t.get('dailyImport')} {t.get('dailyImportUnit') or 'kWh'}")
     _print(f"  policy        {snap['policyState']}")
     _print("")
-    _print("Config vs daytime 40% / night 60% target")
+    _print("Config vs daytime 40% / night 70% cap")
     failed = 0
     for check in snap["checks"]:
         mark = "ok" if check.ok else "FAIL"
@@ -81,7 +81,7 @@ def _print_status(snap: dict[str, Any]) -> None:
     if failed:
         _print(f"{failed} check(s) not matching target.")
     else:
-        _print("Config matches the daytime 40% / night 60% SOC policy.")
+        _print("Config matches the daytime 40% / night 70% SOC policy.")
 
     soc = t.get("batterySoc")
     grid = t.get("gridPower") or 0
@@ -150,7 +150,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m deye_house",
-        description="Apply a 40%% daytime / 60%% night SOC floor and zero-export policy via DeyeCloud India OpenAPI.",
+        description="Apply a 40%% daytime floor / 70%% night cap and zero-export policy via DeyeCloud India OpenAPI.",
     )
     parser.add_argument(
         "--villa",

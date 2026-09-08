@@ -33,20 +33,20 @@ These numbers are for **one house in India** (`Asia/Kolkata`). Treat them as an 
 | When (local time) | Battery floor | Meaning |
 |---|---|---|
 | 09:00–16:00 | **40%** | Use solar + battery first; import only if SOC &lt; 40%. |
-| 16:00–09:00 | **60%** | Hold a higher reserve overnight; import only if SOC &lt; 60%. |
+| 16:00–09:00 | **70% cap** | Grid may charge up to 70%, then stop. If already above 70%, use the battery. |
 
-At 16:00, if SOC is still below 60%, grid charge brings it back up. PV may always charge above the floor. Export stays 0.
+At 16:00, if SOC is still below 70%, grid charge brings it up to 70% only. PV may charge above the cap. Export stays 0.
 
 TOU slots actually sent (each slot lasts until the next):
 
 | Start | SOC |
 |---|---|
-| 00:00 | 60% |
-| 04:00 | 60% |
+| 00:00 | 70% |
+| 04:00 | 70% |
 | 09:00 | 40% |
 | 12:00 | 40% |
-| 16:00 | 60% |
-| 20:00 | 60% |
+| 16:00 | 70% |
+| 20:00 | 70% |
 
 ## What every user must set (credentials)
 
@@ -96,7 +96,7 @@ Almost all behaviour lives in **`deye_house/policy.py`**. Change it, run tests, 
 |---|---|---|
 | Day vs night hours | `DAY_START`, `DAY_END` **and** `TOU_SLOTS` times | Deye has **exactly six** TOU slots. Slot times must line up with your window (a slot lasts until the next start). `DAY_START`/`DAY_END` only affect `status` labels; the inverter follows `TOU_SLOTS`. |
 | How low the battery may go in the day | `SOC_FLOOR_DAY` and the daytime rows in `TOU_SLOTS` | Also set `BATT_LOW` to the **lowest** floor you use. |
-| Overnight reserve | `SOC_FLOOR_NIGHT` and night rows in `TOU_SLOTS` | Typical 50–80%. Higher = more grid import at night, more backup left. |
+| Overnight reserve / night charge cap | `SOC_FLOOR_NIGHT` and night rows in `TOU_SLOTS` | With grid charge on, this % is the **charge ceiling**, not a fill-to-100% flag. |
 | Clock / timezone | `SITE_TZ` | Use the IANA zone of the site (`Asia/Kolkata`, `Europe/Berlin`, …). |
 | Charge power in a TOU slot | `TOU_POWER_W` | Do not exceed the inverter’s charge rating (this example uses 6000 W for a 6 kW hybrid). |
 | Which weekdays TOU is on | `TOU_DAYS` | Default is every day. |

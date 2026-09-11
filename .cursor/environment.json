@@ -1,0 +1,4 @@
+{
+  "name": "Deye house inverter CLI",
+  "install": "python3 --version && python3 -m compileall -q deye_house tests"
+}

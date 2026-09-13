@@ -4,16 +4,19 @@
 # Secrets: DEYE_APP_ID, DEYE_APP_SECRET, DEYE_EMAIL, DEYE_PASSWORD (never commit).
 #
 # Policy (Asia/Kolkata):
-# - 09:00–16:00: SOC floor 40%. Use PV+battery above 40%; grid only if SOC < 40%.
-# - Otherwise: SOC cap/target 70%. Grid may charge up to 70%, then stop.
-#   If SOC is already above 70%, use the battery down toward 70%. PV may still go higher.
+# - Every TOU slot: SOC floor 40%. Use PV+battery above 40%; grid may charge
+#   the battery only if SOC < 40% (thin emergency floor, not a nightly top-up).
+# - Night must not use a high SOC (70% did). TOU SOC is a discharge floor:
+#   locking at ~70% overnight sends house load to the grid while the battery
+#   sits full (~7–8.5 kWh/day import, 00:00–06:00).
+# - 09:00–16:00 is the sun-aware day window for status labels; floors match.
 # - Export stays 0.
-# - Global GRID_CHARGE master is OFF. Only TOU slot enableGridCharge may import to the battery.
-#   Leaving the master ON charged past the TOU target overnight (~90%).
+# - Global GRID_CHARGE master is OFF. Only TOU slot enableGridCharge may import
+#   to the battery. Leaving the master ON charged past the TOU target (~90%).
 #
 # TOU slots (each lasts until the next):
-#   00:00 soc=70, 04:00 soc=70, 09:00 soc=40, 12:00 soc=40, 16:00 soc=70, 20:00 soc=70
-# BATT_LOW=40 so daytime discharge to 40% is allowed.
+#   00:00 soc=40, 04:00 soc=40, 09:00 soc=40, 12:00 soc=40, 16:00 soc=40, 20:00 soc=40
+# BATT_LOW=40 so discharge to the lowest TOU floor is allowed.
 #
 # Commands (one order at a time; poll GET /order/{id} until status 666):
 # 1. POST /order/sys/workMode/update ZERO_EXPORT_TO_LOAD

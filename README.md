@@ -1,6 +1,6 @@
 # Deye house inverter CLI
 
-This repo talks to a **Deye hybrid inverter** through the official **DeyeCloud OpenAPI**. Its job is to **cut grid import** without selling power to the grid, by telling the inverter when it may use the battery and when it must charge from the grid.
+This repo talks to a **Deye hybrid inverter** through the official **DeyeCloud OpenAPI**. Its job is to **cut grid import** without selling power to the grid, by telling the inverter when it may use the battery and when it may charge from the grid. A high night SOC forbids overnight discharge — the house then imports while the battery sits full.
 
 It is a small **Python command-line tool**. There is no website and no phone-app plugin. After you run `apply` once, the schedule lives **on the inverter**. You do not need this program running 24/7.
 
@@ -11,9 +11,9 @@ Use this if you have a Deye hybrid (PV + battery + grid) on DeyeCloud and you wa
 DeyeCloud does not run a live “if SOC then …” script in the cloud. This CLI **writes inverter settings** that implement the policy natively:
 
 1. **Zero export** — work mode `ZERO_EXPORT_TO_LOAD`, max sell / zero-export power `0`, solar sell off.
-2. **Time-of-use (TOU)** — six daily slots. Each slot’s **SOC** is the floor for that window: above it, the house runs on PV + battery; below it, the inverter may import from the grid until that SOC is reached.
+2. **Time-of-use (TOU)** — six daily slots. Each slot’s **SOC** is the floor for that window: above it, the house runs on PV + battery; below it, the inverter may import from the grid until that SOC is reached. This is a **discharge lock** as well as a charge cap. Setting night SOC to 70% is why overnight load ran on grid while the battery sat at ~70–80%.
 3. **Hard battery low** — `BATT_LOW` must be **as low as the lowest TOU floor**, or the inverter will refuse to discharge that far.
-4. **Grid charge on** — required so a low SOC can recover from the grid. The TOU SOC is what **stops** grid charging.
+4. **Grid charge on the TOU slots only** — `enableGridCharge` lets a low SOC recover from the grid **up to that slot’s SOC**, then stop. With a 40% floor that is an emergency top-up, not a nightly fill to 70%. The global `GRID_CHARGE` master stays **off** (it overshoots the TOU cap).
 
 Commands:
 
@@ -32,21 +32,21 @@ These numbers are for **one house in India** (`Asia/Kolkata`). Treat them as an 
 
 | When (local time) | Battery floor | Meaning |
 |---|---|---|
-| 09:00–16:00 | **40%** | Use solar + battery first; import only if SOC &lt; 40%. |
-| 16:00–09:00 | **70% cap** | Grid may charge up to 70%, then stop. If already above 70%, use the battery. |
+| 09:00–16:00 | **40%** | Use solar + battery first; import / grid-charge the battery only if SOC &lt; 40%. |
+| 16:00–09:00 | **40%** | Same emergency floor. Overnight house load comes from the battery, not the grid, while SOC stays above 40%. |
 
-At 16:00, if SOC is still below 70%, grid charge brings it up to 70% only. PV may charge above the cap. Export stays 0.
+Night used to be a **70% cap**. That stopped grid *charging* past 70%, but it also stopped *discharging* below 70%. Typical nights then imported ~7–8.5 kWh (00:00–06:00) with SOC flat at ~70–80%. Flattening night to 40% unlocks that stored energy. Grid charge still recovers only to 40% if the battery is actually empty. Export stays 0.
 
 TOU slots actually sent (each slot lasts until the next):
 
 | Start | SOC |
 |---|---|
-| 00:00 | 70% |
-| 04:00 | 70% |
+| 00:00 | 40% |
+| 04:00 | 40% |
 | 09:00 | 40% |
 | 12:00 | 40% |
-| 16:00 | 70% |
-| 20:00 | 70% |
+| 16:00 | 40% |
+| 20:00 | 40% |
 
 ## What every user must set (credentials)
 
@@ -96,7 +96,7 @@ Almost all behaviour lives in **`deye_house/policy.py`**. Change it, run tests, 
 |---|---|---|
 | Day vs night hours | `DAY_START`, `DAY_END` **and** `TOU_SLOTS` times | Deye has **exactly six** TOU slots. Slot times must line up with your window (a slot lasts until the next start). `DAY_START`/`DAY_END` only affect `status` labels; the inverter follows `TOU_SLOTS`. |
 | How low the battery may go in the day | `SOC_FLOOR_DAY` and the daytime rows in `TOU_SLOTS` | Also set `BATT_LOW` to the **lowest** floor you use. |
-| Overnight reserve / night charge cap | `SOC_FLOOR_NIGHT` and night rows in `TOU_SLOTS` | With grid charge on, this % is the **charge ceiling**, not a fill-to-100% flag. |
+| Overnight reserve / night charge cap | `SOC_FLOOR_NIGHT` and night rows in `TOU_SLOTS` | This % is a **discharge floor** *and* a charge ceiling. Too high = overnight grid-for-load. Do not set night above day, or 09:00 will grid-charge the gap. |
 | Clock / timezone | `SITE_TZ` | Use the IANA zone of the site (`Asia/Kolkata`, `Europe/Berlin`, …). |
 | Charge power in a TOU slot | `TOU_POWER_W` | Do not exceed the inverter’s charge rating (this example uses 6000 W for a 6 kW hybrid). |
 | Which weekdays TOU is on | `TOU_DAYS` | Default is every day. |
@@ -131,7 +131,8 @@ Orders are sent **one at a time**. The cloud rejects overlapping writes (`210400
 
 - `apply` **changes the live inverter**. Start with `status` and `--dry-run`.
 - Keep export at 0 unless you are sure your utility allows feed-in.
-- Do not set `BATT_LOW` higher than your lowest TOU SOC, or daytime discharge will stop early.
+- Do not set `BATT_LOW` higher than your lowest TOU SOC, or discharge will stop early.
+- Do not raise the night TOU SOC to “save battery”: that is how overnight load falls back to the grid.
 - Do not share App Secret, password, or tokens.
 
 ## Deye API

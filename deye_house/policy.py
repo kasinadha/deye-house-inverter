@@ -1,8 +1,13 @@
 """SOC floor / zero-export policy for the house hybrid inverter.
 
-Night target is a 70% cap: grid may charge up to 70%, not past it.
-From 09:00 to 16:00 (Asia/Kolkata) the floor drops to 40% so daytime load
-can come from the battery before grid import.
+Goal: minimize daily grid import. Deye TOU SOC is a *discharge floor* and a
+grid-charge ceiling. A high night SOC (70%) was meant to stop overnight grid
+charging past 70%, but it also forbids discharging below 70% — so the house
+runs on grid while the battery sits nearly full (~7–8.5 kWh/day import).
+
+All slots now use a 40% emergency floor: above 40% the house uses PV+battery;
+grid may charge the battery only if SOC drops below 40%. Day window 09:00–16:00
+stays sun-aware for status labels; the inverter follows the six TOU slots.
 """
 
 from __future__ import annotations
@@ -13,7 +18,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 SITE_TZ = ZoneInfo("Asia/Kolkata")
-SOC_FLOOR_NIGHT = 70
+# Same emergency floor day and night. Night must not sit above day, or 09:00
+# would grid-charge the gap. 40% matches the established daytime safety line
+# and stays above a typical ~20% shutdown.
+SOC_FLOOR_NIGHT = 40
 SOC_FLOOR_DAY = 40
 DAY_START = time(9, 0)
 DAY_END = time(16, 0)
@@ -30,10 +38,11 @@ TOU_DAYS = (
 WORK_MODE = "ZERO_EXPORT_TO_LOAD"
 ENERGY_PATTERN = "LOAD_FIRST"
 
-# Each slot lasts until the next. 09:00–16:00 is the daytime 40% window.
-# Night SOC is a grid-charge cap: with enableGridCharge, Deye charges up to
-# this % then stops. Do not also leave the global GRID_CHARGE master on —
-# that combination filled past the TOU target overnight (~90%).
+# Each slot lasts until the next. SOC is the discharge floor *and* the
+# enableGridCharge ceiling. Keep it at the emergency floor overnight so the
+# battery can cover house load instead of locking at ~70%.
+# Do not also leave the global GRID_CHARGE master on — that combination
+# filled past the TOU target overnight (~90%).
 TOU_SLOTS = (
     {"time": "00:00", "soc": SOC_FLOOR_NIGHT, "enableGridCharge": True},
     {"time": "04:00", "soc": SOC_FLOOR_NIGHT, "enableGridCharge": True},
@@ -44,8 +53,8 @@ TOU_SLOTS = (
 )
 TOU_TIMES = tuple(slot["time"] for slot in TOU_SLOTS)
 
-# Hard low-SOC must be the daytime floor so TOU can discharge to 40%.
-BATT_LOW = SOC_FLOOR_DAY
+# Hard low-SOC must match the lowest TOU floor or discharge stops early.
+BATT_LOW = min(SOC_FLOOR_DAY, SOC_FLOOR_NIGHT)
 
 
 def is_day_window(when: datetime | None = None) -> bool:
@@ -103,12 +112,12 @@ def apply_orders(device_sn: str) -> list[tuple[str, str, dict[str, Any]]]:
             },
         ),
         (
-            "BATT_LOW=40",
+            f"BATT_LOW={BATT_LOW}",
             "/order/battery/parameter/update",
             {"deviceSn": device_sn, "paramterType": "BATT_LOW", "value": BATT_LOW},
         ),
         (
-            "TOU slots day 40% / night 70% cap",
+            f"TOU slots day {SOC_FLOOR_DAY}% / night {SOC_FLOOR_NIGHT}% floor",
             "/order/sys/tou/update",
             {"deviceSn": device_sn, "timeUseSettingItems": tou_slots()},
         ),
@@ -259,7 +268,7 @@ def verify_config(
 
 def policy_state(soc: float | None, when: datetime | None = None) -> str:
     floor = active_soc_floor(when)
-    window = "day" if floor == SOC_FLOOR_DAY else "night"
+    window = "day" if is_day_window(when) else "night"
     if soc is None:
         return f"unknown ({window} floor {floor}%)"
     if soc > floor:

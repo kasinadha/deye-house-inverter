@@ -1,13 +1,16 @@
 """SOC floor / zero-export policy for the house hybrid inverter.
 
-Goal: minimize daily grid import. Deye TOU SOC is a *discharge floor* and a
-grid-charge ceiling. A high night SOC (70%) was meant to stop overnight grid
-charging past 70%, but it also forbids discharging below 70% — so the house
-runs on grid while the battery sits nearly full (~7–8.5 kWh/day import).
+Goal: minimize daily grid import. PV covers whatever load it can; the battery
+covers the rest down to a 40% floor; grid is last.
 
-All slots now use a 40% emergency floor: above 40% the house uses PV+battery;
-grid may charge the battery only if SOC drops below 40%. Day window 09:00–16:00
-stays sun-aware for status labels; the inverter follows the six TOU slots.
+Deye TOU ``enableGridCharge`` is permission to use the *grid as a source* in
+that slot. With it on, a full battery can sit idle while the house imports
+(confirmed 2026-09-19 15:28 IST: PV 3.36 kW, UPS load 4.60 kW, grid 1.36 kW,
+battery 99% / 31 W). Slots keep Grid Charge **off** so SOC=40% is a discharge
+floor, not a "use grid" flag. Global GRID_CHARGE master stays off too.
+
+A high night SOC (70%) also forbids discharging below 70%. Both traps cause
+overnight grid-for-load. Day window 09:00–16:00 is for status labels only.
 """
 
 from __future__ import annotations
@@ -38,18 +41,18 @@ TOU_DAYS = (
 WORK_MODE = "ZERO_EXPORT_TO_LOAD"
 ENERGY_PATTERN = "LOAD_FIRST"
 
-# Each slot lasts until the next. SOC is the discharge floor *and* the
-# enableGridCharge ceiling. Keep it at the emergency floor overnight so the
-# battery can cover house load instead of locking at ~70%.
-# Do not also leave the global GRID_CHARGE master on — that combination
-# filled past the TOU target overnight (~90%).
+# Each slot lasts until the next. SOC is the discharge floor. Grid Charge off
+# so PV+battery supply the house; grid covers load only after SOC hits 40%.
+# Do not leave the global GRID_CHARGE master on — that filled past the TOU
+# target overnight (~90%). Do not tick slot Grid Charge either — that is how
+# a 99% pack still imports while the sun is up.
 TOU_SLOTS = (
-    {"time": "00:00", "soc": SOC_FLOOR_NIGHT, "enableGridCharge": True},
-    {"time": "04:00", "soc": SOC_FLOOR_NIGHT, "enableGridCharge": True},
-    {"time": "09:00", "soc": SOC_FLOOR_DAY, "enableGridCharge": True},
-    {"time": "12:00", "soc": SOC_FLOOR_DAY, "enableGridCharge": True},
-    {"time": "16:00", "soc": SOC_FLOOR_NIGHT, "enableGridCharge": True},
-    {"time": "20:00", "soc": SOC_FLOOR_NIGHT, "enableGridCharge": True},
+    {"time": "00:00", "soc": SOC_FLOOR_NIGHT, "enableGridCharge": False},
+    {"time": "04:00", "soc": SOC_FLOOR_NIGHT, "enableGridCharge": False},
+    {"time": "09:00", "soc": SOC_FLOOR_DAY, "enableGridCharge": False},
+    {"time": "12:00", "soc": SOC_FLOOR_DAY, "enableGridCharge": False},
+    {"time": "16:00", "soc": SOC_FLOOR_NIGHT, "enableGridCharge": False},
+    {"time": "20:00", "soc": SOC_FLOOR_NIGHT, "enableGridCharge": False},
 )
 TOU_TIMES = tuple(slot["time"] for slot in TOU_SLOTS)
 
@@ -79,7 +82,7 @@ def tou_slots(enable_grid_charge: bool | None = None) -> list[dict[str, Any]]:
             "enableGridCharge": (
                 enable_grid_charge
                 if enable_grid_charge is not None
-                else bool(slot.get("enableGridCharge", True))
+                else bool(slot.get("enableGridCharge", False))
             ),
             "power": TOU_POWER_W,
             "soc": slot["soc"],
@@ -103,7 +106,7 @@ def apply_orders(device_sn: str) -> list[tuple[str, str, dict[str, Any]]]:
             {"deviceSn": device_sn, "energyPattern": ENERGY_PATTERN},
         ),
         (
-            "GRID_CHARGE off (TOU slots own the cap)",
+            "GRID_CHARGE off (do not grid-charge the pack)",
             "/order/battery/modeControl",
             {
                 "deviceSn": device_sn,
@@ -117,7 +120,7 @@ def apply_orders(device_sn: str) -> list[tuple[str, str, dict[str, Any]]]:
             {"deviceSn": device_sn, "paramterType": "BATT_LOW", "value": BATT_LOW},
         ),
         (
-            f"TOU slots day {SOC_FLOOR_DAY}% / night {SOC_FLOOR_NIGHT}% floor",
+            f"TOU slots {SOC_FLOOR_DAY}%/{SOC_FLOOR_NIGHT}% floor, grid-charge off",
             "/order/sys/tou/update",
             {"deviceSn": device_sn, "timeUseSettingItems": tou_slots()},
         ),
@@ -238,7 +241,9 @@ def verify_config(
                 _as_int(slot.get("soc")) == expected_soc,
             )
         )
-        expected_grid = bool(TOU_SLOTS[i].get("enableGridCharge", True)) if i < len(TOU_SLOTS) else True
+        expected_grid = (
+            bool(TOU_SLOTS[i].get("enableGridCharge", False)) if i < len(TOU_SLOTS) else False
+        )
         checks.append(
             Check(
                 f"{prefix}.enableGridCharge",

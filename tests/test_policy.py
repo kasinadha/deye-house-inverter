@@ -76,7 +76,7 @@ class PolicyTests(unittest.TestCase):
         slots = tou_slots()
         self.assertEqual([s["soc"] for s in slots], [40, 40, 40, 40, 40, 40])
         self.assertEqual([s["time"] for s in slots], ["00:00", "04:00", "09:00", "12:00", "16:00", "20:00"])
-        self.assertTrue(all(s["enableGridCharge"] is True for s in slots))
+        self.assertTrue(all(s["enableGridCharge"] is False for s in slots))
         self.assertTrue(all(s["enableGeneration"] is True for s in slots))
         self.assertTrue(all(s["power"] == 6000 for s in slots))
 
@@ -167,6 +167,24 @@ class PolicyTests(unittest.TestCase):
         tou_items = by_path["/order/sys/tou/update"]["timeUseSettingItems"]
         self.assertEqual(len(tou_items), 6)
         self.assertEqual([item["soc"] for item in tou_items], [40, 40, 40, 40, 40, 40])
+        self.assertTrue(all(item["enableGridCharge"] is False for item in tou_items))
+
+    def test_verify_detects_slot_grid_charge_enabled(self) -> None:
+        """Grid Charge on a slot can leave a full pack idle while the house imports."""
+        system = {
+            "systemWorkMode": "ZERO_EXPORT_TO_LOAD",
+            "energyPattern": "LOAD_FIRST",
+            "maxSellPower": 0,
+            "zeroExportPower": 0,
+        }
+        tou = {"touAction": "on", "timeUseSettingItems": tou_slots()}
+        tou["timeUseSettingItems"][3]["enableGridCharge"] = True  # 12:00–16:00
+        battery = {"battLowCapacity": 40}
+        checks = verify_config(system, tou, battery)
+        self.assertFalse(all(c.ok for c in checks))
+        failed = {c.name: c for c in checks if not c.ok}
+        self.assertIn("slot3.enableGridCharge", failed)
+        self.assertEqual(failed["slot3.enableGridCharge"].expected, False)
 
 
 class TelemetryTests(unittest.TestCase):

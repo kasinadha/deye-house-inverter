@@ -161,8 +161,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m deye_house",
         description=(
-            "Apply a 40%% SOC floor (day and night) and zero-export policy "
-            "via DeyeCloud India OpenAPI so overnight load uses the battery."
+            "Apply a 40%% SOC floor with TOU grid-charge off and zero-export "
+            "via DeyeCloud India OpenAPI so PV+battery cover load before grid."
         ),
     )
     parser.add_argument(

@@ -9,7 +9,14 @@ import time
 from typing import Any
 
 from deye_house.client import DeyeClient, DeyeError, discover_inverter, env_file_path
-from deye_house.policy import active_soc_floor, apply_orders, policy_state, verify_config
+from deye_house.policy import (
+    SOC_FLOOR_DAY,
+    SOC_FLOOR_NIGHT,
+    active_soc_floor,
+    apply_orders,
+    policy_state,
+    verify_config,
+)
 from deye_house.telemetry import parse_latest
 
 
@@ -70,7 +77,7 @@ def _print_status(snap: dict[str, Any]) -> None:
     _print(f"  dailyImport   {t.get('dailyImport')} {t.get('dailyImportUnit') or 'kWh'}")
     _print(f"  policy        {snap['policyState']}")
     _print("")
-    _print("Config vs daytime 40% / night 70% cap")
+    _print(f"Config vs {SOC_FLOOR_DAY}% day / {SOC_FLOOR_NIGHT}% night SOC floor")
     failed = 0
     for check in snap["checks"]:
         mark = "ok" if check.ok else "FAIL"
@@ -81,7 +88,10 @@ def _print_status(snap: dict[str, Any]) -> None:
     if failed:
         _print(f"{failed} check(s) not matching target.")
     else:
-        _print("Config matches the daytime 40% / night 70% SOC policy.")
+        _print(
+            f"Config matches the {SOC_FLOOR_DAY}% day / {SOC_FLOOR_NIGHT}% night "
+            "SOC floor policy."
+        )
 
     soc = t.get("batterySoc")
     grid = t.get("gridPower") or 0
@@ -150,7 +160,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m deye_house",
-        description="Apply a 40%% daytime floor / 70%% night cap and zero-export policy via DeyeCloud India OpenAPI.",
+        description=(
+            "Apply a 40%% SOC floor with TOU grid-charge off and zero-export "
+            "via DeyeCloud India OpenAPI so PV+battery cover load before grid."
+        ),
     )
     parser.add_argument(
         "--villa",

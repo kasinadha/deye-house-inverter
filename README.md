@@ -1,6 +1,6 @@
 # Deye house inverter CLI
 
-This repo talks to a **Deye hybrid inverter** through the official **DeyeCloud OpenAPI**. Its job is to **cut grid import** without selling power to the grid, by telling the inverter when it may use the battery and when it must charge from the grid.
+This repo talks to a **Deye hybrid inverter** through the official **DeyeCloud OpenAPI**. Its job is to **cut grid import** without selling power to the grid. Solar covers the house first; the battery covers the rest down to a 40% floor; the grid is last. Ticking TOU Grid Charge, or raising the night SOC, is how a full battery sits idle while the house imports.
 
 It is a small **Python command-line tool**. There is no website and no phone-app plugin. After you run `apply` once, the schedule lives **on the inverter**. You do not need this program running 24/7.
 
@@ -11,9 +11,9 @@ Use this if you have a Deye hybrid (PV + battery + grid) on DeyeCloud and you wa
 DeyeCloud does not run a live “if SOC then …” script in the cloud. This CLI **writes inverter settings** that implement the policy natively:
 
 1. **Zero export** — work mode `ZERO_EXPORT_TO_LOAD`, max sell / zero-export power `0`, solar sell off.
-2. **Time-of-use (TOU)** — six daily slots. Each slot’s **SOC** is the floor for that window: above it, the house runs on PV + battery; below it, the inverter may import from the grid until that SOC is reached.
+2. **Time-of-use (TOU)** — six daily slots. Each slot’s **SOC** is the discharge floor: above it, the house runs on PV + battery; at it, remaining load may come from the grid. A high night SOC (70%) is one way overnight load ran on grid while the pack sat at ~70–80%.
 3. **Hard battery low** — `BATT_LOW` must be **as low as the lowest TOU floor**, or the inverter will refuse to discharge that far.
-4. **Grid charge on** — required so a low SOC can recover from the grid. The TOU SOC is what **stops** grid charging.
+4. **Grid charge off** — slot `enableGridCharge` stays **false**, and the global `GRID_CHARGE` master stays **off**. Grid Charge on a slot is permission to use the grid as a *source*. With it on, a 99% pack can sit at ~30 W while the house imports the solar shortfall (seen 2026-09-19 15:28 IST: PV 3.36 kW, UPS load 4.60 kW, grid 1.36 kW). The 40% floor is then “use grid for load if the battery is empty,” not “charge the battery from grid.”
 
 Commands:
 
@@ -30,23 +30,23 @@ Python 3.10+, standard library only (`urllib`). No pip packages required.
 
 These numbers are for **one house in India** (`Asia/Kolkata`). Treat them as an example, not a universal default.
 
-| When (local time) | Battery floor | Meaning |
-|---|---|---|
-| 09:00–16:00 | **40%** | Use solar + battery first; import only if SOC &lt; 40%. |
-| 16:00–09:00 | **70% cap** | Grid may charge up to 70%, then stop. If already above 70%, use the battery. |
+| When (local time) | Battery floor | Grid charge | Meaning |
+|---|---|---|---|
+| 09:00–16:00 | **40%** | **off** | Solar to load first; battery covers the shortfall while SOC &gt; 40%. |
+| 16:00–09:00 | **40%** | **off** | Same. Overnight house load comes from the battery, not the grid. |
 
-At 16:00, if SOC is still below 70%, grid charge brings it up to 70% only. PV may charge above the cap. Export stays 0.
+Solar cannot cover more kW than it is producing. If load is 4.6 kW and PV is 3.4 kW, the remaining ~1.2 kW should come from the battery whenever SOC is above 40% — not from the grid. Night used to be a **70% cap** with Grid Charge ticked; both of those send overnight load to the grid. Flattening night to 40% *and* turning Grid Charge off lets the pack discharge. Export stays 0.
 
 TOU slots actually sent (each slot lasts until the next):
 
-| Start | SOC |
-|---|---|
-| 00:00 | 70% |
-| 04:00 | 70% |
-| 09:00 | 40% |
-| 12:00 | 40% |
-| 16:00 | 70% |
-| 20:00 | 70% |
+| Start | SOC | Grid charge |
+|---|---|---|
+| 00:00 | 40% | off |
+| 04:00 | 40% | off |
+| 09:00 | 40% | off |
+| 12:00 | 40% | off |
+| 16:00 | 40% | off |
+| 20:00 | 40% | off |
 
 ## What every user must set (credentials)
 
@@ -96,7 +96,8 @@ Almost all behaviour lives in **`deye_house/policy.py`**. Change it, run tests, 
 |---|---|---|
 | Day vs night hours | `DAY_START`, `DAY_END` **and** `TOU_SLOTS` times | Deye has **exactly six** TOU slots. Slot times must line up with your window (a slot lasts until the next start). `DAY_START`/`DAY_END` only affect `status` labels; the inverter follows `TOU_SLOTS`. |
 | How low the battery may go in the day | `SOC_FLOOR_DAY` and the daytime rows in `TOU_SLOTS` | Also set `BATT_LOW` to the **lowest** floor you use. |
-| Overnight reserve / night charge cap | `SOC_FLOOR_NIGHT` and night rows in `TOU_SLOTS` | With grid charge on, this % is the **charge ceiling**, not a fill-to-100% flag. |
+| Overnight reserve / night charge cap | `SOC_FLOOR_NIGHT` and night rows in `TOU_SLOTS` | This % is a **discharge floor**. Too high = overnight grid-for-load. Do not set night above day. |
+| Whether a slot may charge the battery from grid | `enableGridCharge` on each `TOU_SLOTS` row | Leave **false** to minimize import. True is how a full pack still imports while the sun is up. |
 | Clock / timezone | `SITE_TZ` | Use the IANA zone of the site (`Asia/Kolkata`, `Europe/Berlin`, …). |
 | Charge power in a TOU slot | `TOU_POWER_W` | Do not exceed the inverter’s charge rating (this example uses 6000 W for a 6 kW hybrid). |
 | Which weekdays TOU is on | `TOU_DAYS` | Default is every day. |
@@ -131,7 +132,10 @@ Orders are sent **one at a time**. The cloud rejects overlapping writes (`210400
 
 - `apply` **changes the live inverter**. Start with `status` and `--dry-run`.
 - Keep export at 0 unless you are sure your utility allows feed-in.
-- Do not set `BATT_LOW` higher than your lowest TOU SOC, or daytime discharge will stop early.
+- Do not set `BATT_LOW` higher than your lowest TOU SOC, or discharge will stop early.
+- Do not raise the night TOU SOC to “save battery”: that is how overnight load falls back to the grid.
+- Do not tick TOU Grid Charge (or leave the global GRID_CHARGE master on) if the goal is minimize import.
+- DeyeCloud **Weather Shield / Force Charge** (the in-app “auto-charges before blackout” banner) can lock SOC at 80%+ and override this CLI. Turn it off in the phone app. This repo has no API for it.
 - Do not share App Secret, password, or tokens.
 
 ## Deye API
